@@ -131,6 +131,11 @@ _core_returns = dict(
     An object managing multiple subplots that correspond to joint and marginal axes
     for pairwise combinations of multiple variables in a dataset.
     """,
+    brokengrid="""
+:class:`BrokenAxes`
+    An object managing multiple stacked subplots that display a continuous
+    dataset across a discontinuous axis range.
+    """,
 )
 
 
@@ -187,6 +192,12 @@ JointGrid : Set up a figure with joint and marginal views on bivariate data.
     """,
     pairgrid="""
 PairGrid : Set up a figure with joint and marginal views on multiple variables.
+    """,
+    broken_axes="""
+broken_axes : Create a figure with one or more axis breaks.
+    """,
+    brokengrid="""
+BrokenAxes : Set up a figure with one or more discontinuous axis segments.
     """,
 )
 

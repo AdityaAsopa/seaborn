@@ -26,7 +26,10 @@ from ._docstrings import (
     _core_docs,
 )
 
-__all__ = ["FacetGrid", "PairGrid", "JointGrid", "pairplot", "jointplot"]
+__all__ = [
+    "FacetGrid", "PairGrid", "JointGrid", "pairplot", "jointplot",
+    "BrokenAxes", "broken_axes",
+]
 
 
 _param_docs = DocstringComponents.from_nested_components(
@@ -2396,6 +2399,527 @@ Examples
 
 """.format(
     params=_param_docs,
+    returns=_core_docs["returns"],
+    seealso=_core_docs["seealso"],
+)
+
+
+class BrokenAxes(_BaseGrid):
+    """Grid for plots with one or more discontinuous axis ranges.
+
+    Many plots can be drawn by using the figure-level interface
+    :func:`broken_axes`. Use this class directly when you need more
+    flexibility, such as embedding the broken-axis layout as a cell
+    in a larger figure via ``subplot_spec``.
+
+    """
+
+    def __init__(
+        self,
+        *,
+        ylims=None,
+        xlims=None,
+        height_ratios=None,
+        width_ratios=None,
+        d=0.5,
+        hspace=0.05,
+        wspace=0.05,
+        fig=None,
+        subplot_spec=None,
+        figsize=None,
+        despine=True,
+    ):
+        # --- Validation ---
+        if ylims is None and xlims is None:
+            raise ValueError("Provide at least one of 'ylims' or 'xlims'.")
+        if ylims is not None and len(ylims) < 2:
+            raise ValueError("'ylims' must contain at least 2 (lo, hi) pairs.")
+        if xlims is not None and len(xlims) < 2:
+            raise ValueError("'xlims' must contain at least 2 (lo, hi) pairs.")
+        if (height_ratios is not None and ylims is not None
+                and len(height_ratios) != len(ylims)):
+            raise ValueError("'height_ratios' length must match 'ylims'.")
+        if (width_ratios is not None and xlims is not None
+                and len(width_ratios) != len(xlims)):
+            raise ValueError("'width_ratios' length must match 'xlims'.")
+        if fig is not None and subplot_spec is not None:
+            raise ValueError("Provide at most one of 'fig' and 'subplot_spec'.")
+
+        # Store break parameters for later use by methods
+        self._ylims = ylims
+        self._xlims = xlims
+
+        # --- Figure setup ---
+        if subplot_spec is not None:
+            owner_fig = subplot_spec.get_gridspec().figure
+            self._figure = owner_fig if owner_fig is not None else plt.gcf()
+        elif fig is not None:
+            self._figure = fig
+        else:
+            self._figure = plt.figure(
+                figsize=figsize if figsize is not None
+                else mpl.rcParams["figure.figsize"]
+            )
+
+        # --- Build axes ---
+        if ylims is not None and xlims is None:
+            self.axes = self._build_y_axes(ylims, height_ratios, hspace, subplot_spec)
+        elif xlims is not None and ylims is None:
+            self.axes = self._build_x_axes(xlims, width_ratios, wspace, subplot_spec)
+        else:
+            self.axes = self._build_xy_axes(
+                ylims, xlims, height_ratios, width_ratios,
+                hspace, wspace, subplot_spec,
+            )
+
+        # --- Seaborn despine style (must run before inner-spine hiding,
+        #     because despine's default bottom=False/left=False explicitly
+        #     calls set_visible(True) which would undo inner spine hiding) ---
+        if despine:
+            for ax in self.axes:
+                utils.despine(ax=ax)
+
+        # --- Spine and tick management ---
+        if ylims is not None and xlims is None:
+            self._setup_y_spines()
+        elif xlims is not None and ylims is None:
+            self._setup_x_spines()
+        else:
+            self._setup_xy_spines()
+
+        # --- Break markers ---
+        if ylims is not None and xlims is None:
+            for i in range(len(self.axes) - 1):
+                self._add_break_markers(self.axes[i], self.axes[i + 1], d, "bottom")
+        elif xlims is not None and ylims is None:
+            for i in range(len(self.axes) - 1):
+                self._add_break_markers(self.axes[i], self.axes[i + 1], d, "right")
+        else:
+            ny = len(ylims)
+            nx = len(xlims)
+            axes_2d = self._axes_2d
+            for row in range(ny):
+                for col in range(nx - 1):
+                    self._add_break_markers(
+                        axes_2d[row, col], axes_2d[row, col + 1], d, "right"
+                    )
+            for row in range(ny - 1):
+                for col in range(nx):
+                    self._add_break_markers(
+                        axes_2d[row, col], axes_2d[row + 1, col], d, "bottom"
+                    )
+
+        # --- Convenience attributes for 2-segment cases ---
+        if ylims is not None and xlims is None and len(ylims) == 2:
+            self.ax_top, self.ax_bottom = self.axes
+        if xlims is not None and ylims is None and len(xlims) == 2:
+            self.ax_left, self.ax_right = self.axes
+
+    # ------------------------------------------------------------------
+    # Private: axis construction helpers
+    # ------------------------------------------------------------------
+
+    def _make_gridspec(self, nrows, ncols, height_ratios, width_ratios,
+                       hspace, wspace, subplot_spec):
+        """Create a GridSpec or GridSpecFromSubplotSpec for the given layout."""
+        kw = dict(
+            hspace=hspace,
+            wspace=wspace,
+        )
+        if height_ratios is not None:
+            kw["height_ratios"] = height_ratios
+        if width_ratios is not None:
+            kw["width_ratios"] = width_ratios
+
+        if subplot_spec is not None:
+            return mpl.gridspec.GridSpecFromSubplotSpec(
+                nrows, ncols, subplot_spec=subplot_spec, **kw
+            )
+        else:
+            return mpl.gridspec.GridSpec(nrows, ncols, figure=self._figure, **kw)
+
+    def _build_y_axes(self, ylims, height_ratios, hspace, subplot_spec):
+        """Build axes for a y-axis break (stacked rows)."""
+        ny = len(ylims)
+        # Row 0 is visually at the top, so reverse ylims and ratios
+        ylims_visual = list(reversed(ylims))
+        hr = list(reversed(
+            height_ratios if height_ratios is not None
+            else [abs(hi - lo) for lo, hi in ylims]
+        ))
+        gs = self._make_gridspec(ny, 1, hr, None, hspace, 0, subplot_spec)
+
+        axes = []
+        share_x = None
+        for i, lim in enumerate(ylims_visual):
+            kw = {} if share_x is None else {"sharex": share_x}
+            ax = self._figure.add_subplot(gs[i, 0], **kw)
+            if share_x is None:
+                share_x = ax
+            ax.set_ylim(*lim)
+            axes.append(ax)
+        return axes  # [top_ax, ..., bottom_ax]
+
+    def _build_x_axes(self, xlims, width_ratios, wspace, subplot_spec):
+        """Build axes for an x-axis break (side-by-side columns)."""
+        nx = len(xlims)
+        wr = (
+            width_ratios if width_ratios is not None
+            else [abs(hi - lo) for lo, hi in xlims]
+        )
+        gs = self._make_gridspec(1, nx, None, wr, 0, wspace, subplot_spec)
+
+        axes = []
+        share_y = None
+        for i, lim in enumerate(xlims):
+            kw = {} if share_y is None else {"sharey": share_y}
+            ax = self._figure.add_subplot(gs[0, i], **kw)
+            if share_y is None:
+                share_y = ax
+            ax.set_xlim(*lim)
+            axes.append(ax)
+        return axes  # [left_ax, ..., right_ax]
+
+    def _build_xy_axes(self, ylims, xlims, height_ratios, width_ratios,
+                       hspace, wspace, subplot_spec):
+        """Build axes for breaks on both axes (grid of cells)."""
+        ny, nx = len(ylims), len(xlims)
+        ylims_visual = list(reversed(ylims))
+        hr = list(reversed(
+            height_ratios if height_ratios is not None
+            else [abs(hi - lo) for lo, hi in ylims]
+        ))
+        wr = (
+            width_ratios if width_ratios is not None
+            else [abs(hi - lo) for lo, hi in xlims]
+        )
+        gs = self._make_gridspec(ny, nx, hr, wr, hspace, wspace, subplot_spec)
+
+        axes_2d = np.empty((ny, nx), dtype=object)
+        for row in range(ny):
+            for col in range(nx):
+                sharex = axes_2d[0, col] if row > 0 else None
+                sharey = axes_2d[row, 0] if col > 0 else None
+                kw = {}
+                if sharex is not None:
+                    kw["sharex"] = sharex
+                if sharey is not None:
+                    kw["sharey"] = sharey
+                ax = self._figure.add_subplot(gs[row, col], **kw)
+                ax.set_ylim(*ylims_visual[row])
+                ax.set_xlim(*xlims[col])
+                axes_2d[row, col] = ax
+        self._axes_2d = axes_2d
+        return list(axes_2d.flat)  # row-major: top-left → bottom-right
+
+    # ------------------------------------------------------------------
+    # Private: spine and tick helpers
+    # ------------------------------------------------------------------
+
+    def _setup_y_spines(self):
+        """Hide inner top/bottom spines and x-tick labels on non-bottom axes."""
+        n = len(self.axes)
+        for i, ax in enumerate(self.axes):
+            if i > 0:  # not the topmost segment
+                ax.spines["top"].set_visible(False)
+            if i < n - 1:  # not the bottommost segment
+                ax.spines["bottom"].set_visible(False)
+                # tick_params is persistent across redraws triggered by later
+                # plot calls (unlike plt.setp on tick line objects)
+                ax.tick_params(axis="x", which="both", bottom=False,
+                               labelbottom=False)
+
+    def _setup_x_spines(self):
+        """Hide inner left/right spines and y-tick labels on non-leftmost axes."""
+        n = len(self.axes)
+        for i, ax in enumerate(self.axes):
+            if i > 0:  # not the leftmost segment
+                ax.spines["left"].set_visible(False)
+                ax.tick_params(axis="y", which="both", left=False,
+                               labelleft=False)
+            if i < n - 1:  # not the rightmost segment
+                ax.spines["right"].set_visible(False)
+
+    def _setup_xy_spines(self):
+        """Hide inner spines and tick labels for a 2D broken grid."""
+        ny = len(self._ylims)
+        nx = len(self._xlims)
+        axes_2d = self._axes_2d
+        for row in range(ny):
+            for col in range(nx):
+                ax = axes_2d[row, col]
+                if row > 0:
+                    ax.spines["top"].set_visible(False)
+                if row < ny - 1:
+                    ax.spines["bottom"].set_visible(False)
+                    ax.tick_params(axis="x", which="both", bottom=False,
+                                   labelbottom=False)
+                if col > 0:
+                    ax.spines["left"].set_visible(False)
+                    ax.tick_params(axis="y", which="both", left=False,
+                                   labelleft=False)
+                if col < nx - 1:
+                    ax.spines["right"].set_visible(False)
+
+    # ------------------------------------------------------------------
+    # Private: break marker drawing
+    # ------------------------------------------------------------------
+
+    def _add_break_markers(self, ax_a, ax_b, d, side):
+        """Draw diagonal // marks at the shared boundary between two axes.
+
+        Uses a custom marker path so that the angle of the marks is
+        consistent regardless of the physical size of each axis segment.
+        Markers are only drawn at spine positions that are actually visible.
+
+        Parameters
+        ----------
+        ax_a : Axes
+            The axis whose inner edge (bottom or right) receives markers.
+        ax_b : Axes
+            The axis whose inner edge (top or left) receives markers.
+        d : float
+            Slope of the diagonal marks (vertical / horizontal extent).
+        side : {'bottom', 'right'}
+            Which boundary the break is on.
+        """
+        color = mpl.rcParams.get("axes.edgecolor", "k")
+        lw = mpl.rcParams.get("axes.linewidth", 0.8)
+        marker_kw = dict(
+            marker=[(-1, -d), (1, d)],
+            markersize=mpl.rcParams["lines.markersize"] * 2,
+            linestyle="none",
+            color=color,
+            mec=color,
+            mew=lw,
+            clip_on=False,
+        )
+        if side == "bottom":
+            # Determine which spine positions to mark: always left (x=0),
+            # right (x=1) only if the right spine is still visible.
+            x_pos = [0]
+            if ax_a.spines["right"].get_visible():
+                x_pos.append(1)
+            y_a = [0] * len(x_pos)      # bottom edge of ax_a
+            y_b = [1] * len(x_pos)      # top edge of ax_b
+            ax_a.plot(x_pos, y_a, transform=ax_a.transAxes, **marker_kw)
+            ax_b.plot(x_pos, y_b, transform=ax_b.transAxes, **marker_kw)
+        elif side == "right":
+            # For x-breaks: mark at bottom (y=0) always, top (y=1) only if
+            # the top spine is still visible.
+            y_pos = [0]
+            if ax_a.spines["top"].get_visible():
+                y_pos.append(1)
+            x_a = [1] * len(y_pos)     # right edge of ax_a
+            x_b = [0] * len(y_pos)     # left edge of ax_b
+            # Rotate marker 90° for vertical break boundaries
+            rotated_kw = dict(marker_kw, marker=[(-d, -1), (d, 1)])
+            ax_a.plot(x_a, y_pos, transform=ax_a.transAxes, **rotated_kw)
+            ax_b.plot(x_b, y_pos, transform=ax_b.transAxes, **rotated_kw)
+
+    # ------------------------------------------------------------------
+    # Private: gap warning
+    # ------------------------------------------------------------------
+
+    def _warn_if_data_in_gaps(self, kwargs):
+        """Warn if any numeric kwarg values fall in a break gap range."""
+        def _gaps_for(lims):
+            return [(lims[i][1], lims[i + 1][0]) for i in range(len(lims) - 1)]
+
+        for key, val in kwargs.items():
+            try:
+                arr = np.asarray(val, dtype=float)
+            except (TypeError, ValueError):
+                continue
+            if arr.ndim != 1 or len(arr) == 0:
+                continue
+
+            if self._ylims is not None:
+                for lo, hi in _gaps_for(self._ylims):
+                    if np.any((arr > lo) & (arr < hi)):
+                        warnings.warn(
+                            f"Data in '{key}' contains values in the y-axis gap "
+                            f"({lo}, {hi}). These points will not appear in any "
+                            f"segment. Pass clip_data=False to suppress this warning.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+            if self._xlims is not None:
+                for lo, hi in _gaps_for(self._xlims):
+                    if np.any((arr > lo) & (arr < hi)):
+                        warnings.warn(
+                            f"Data in '{key}' contains values in the x-axis gap "
+                            f"({lo}, {hi}). These points will not appear in any "
+                            f"segment. Pass clip_data=False to suppress this warning.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+
+    # ------------------------------------------------------------------
+    # Public methods
+    # ------------------------------------------------------------------
+
+    def set(self, **kwargs):
+        """Set attributes on each subplot Axes."""
+        for ax in self.axes:
+            ax.set(**kwargs)
+        return self
+
+    def plot(self, func, *args, clip_data="warn", **kwargs):
+        """Call a plotting function on each axis segment.
+
+        The function is called once per segment axis. Matplotlib clips data
+        to each axis's limits automatically, so only the portion of the data
+        within a segment's range will be visible in that segment.
+
+        Parameters
+        ----------
+        func : callable
+            A seaborn or matplotlib plotting function. Seaborn functions
+            (those that accept ``ax=``) are called with the segment axis
+            injected automatically. For plain matplotlib functions,
+            :func:`matplotlib.pyplot.sca` is used to set the current axis.
+        clip_data : bool or 'warn'
+            Controls behavior when data values fall in a gap between segments.
+            ``'warn'`` (default) issues a :class:`UserWarning`. ``True``
+            silently clips. ``False`` suppresses all warnings.
+        *args, **kwargs
+            Passed through to ``func`` on each segment axis.
+
+        Returns
+        -------
+        BrokenAxes
+            Returns ``self`` to allow method chaining.
+        """
+        if clip_data == "warn":
+            self._warn_if_data_in_gaps(kwargs)
+
+        accepts_ax = "ax" in signature(func).parameters
+        for ax in self.axes:
+            kw = kwargs.copy()
+            if accepts_ax:
+                func(*args, ax=ax, **kw)
+            else:
+                plt.sca(ax)
+                func(*args, **kw)
+
+        return self
+
+    def set_axis_labels(self, xlabel="", ylabel="", **kwargs):
+        """Set axis labels on the semantically appropriate axes.
+
+        For y-axis breaks, the x-label is placed on the bottom axis and the
+        y-label on the middle-most axis. For x-axis breaks, the y-label is
+        placed on the leftmost axis and the x-label on the middle-most axis.
+
+        Parameters
+        ----------
+        xlabel : str
+        ylabel : str
+        **kwargs
+            Additional keyword arguments passed to ``set_xlabel``/``set_ylabel``.
+
+        Returns
+        -------
+        BrokenAxes
+            Returns ``self`` to allow method chaining.
+        """
+        # Clear all labels first so that plot functions (e.g. sns.lineplot)
+        # that set labels on every axis they draw on don't cause duplicates.
+        for ax in self.axes:
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+
+        if self._xlims is None:  # y-break only
+            self.axes[-1].set_xlabel(xlabel, **kwargs)
+            self.axes[len(self.axes) // 2].set_ylabel(ylabel, **kwargs)
+        elif self._ylims is None:  # x-break only
+            self.axes[0].set_ylabel(ylabel, **kwargs)
+            self.axes[len(self.axes) // 2].set_xlabel(xlabel, **kwargs)
+        else:  # 2D break: label the bottom-left cell
+            self._axes_2d[-1, 0].set_xlabel(xlabel, **kwargs)
+            self._axes_2d[-1, 0].set_ylabel(ylabel, **kwargs)
+        return self
+
+
+BrokenAxes.__init__.__doc__ = """\
+Set up a figure with one or more discontinuous axis segments.
+
+Parameters
+----------
+ylims : list of (lo, hi) pairs, optional
+    Y-axis segment limits, ordered bottom-to-top. Each pair defines the
+    visible data range for one stacked row. At least two pairs are required.
+    If only ``ylims`` is given the x-axis is shared across all segments.
+xlims : list of (lo, hi) pairs, optional
+    X-axis segment limits, ordered left-to-right. Each pair defines the
+    visible data range for one column. At least two pairs are required.
+    If only ``xlims`` is given the y-axis is shared across all segments.
+height_ratios : list of numbers, optional
+    Relative height of each y-segment. Length must equal ``len(ylims)``.
+    Defaults to the data range of each segment (``hi - lo``).
+width_ratios : list of numbers, optional
+    Relative width of each x-segment. Length must equal ``len(xlims)``.
+    Defaults to the data range of each segment.
+d : float
+    Slope of the diagonal break markers, expressed as the ratio of vertical
+    to horizontal extent. Larger values produce steeper marks. Default is
+    0.5 (approximately 27°), which matches the matplotlib convention.
+hspace : float
+    Vertical space between y-broken segments. Default is 0.05.
+wspace : float
+    Horizontal space between x-broken segments. Default is 0.05.
+fig : :class:`matplotlib.figure.Figure`, optional
+    Existing figure to add the broken axes to. Mutually exclusive with
+    ``subplot_spec``.
+subplot_spec : :class:`matplotlib.gridspec.SubplotSpec`, optional
+    A SubplotSpec cell in an existing figure layout. When provided,
+    the broken axes are embedded inside that cell using
+    :class:`~matplotlib.gridspec.GridSpecFromSubplotSpec`, and no new
+    figure is created.
+figsize : pair of numbers, optional
+    ``(width, height)`` in inches for a new figure. Ignored when ``fig``
+    or ``subplot_spec`` is provided.
+despine : bool
+    If ``True`` (default), remove the top and right spines from all
+    segment axes using :func:`seaborn.despine`.
+
+See Also
+--------
+{seealso.broken_axes}
+{seealso.jointgrid}
+""".format(seealso=_core_docs["seealso"])
+
+
+def broken_axes(ylims=None, xlims=None, **kwargs):
+    return BrokenAxes(ylims=ylims, xlims=xlims, **kwargs)
+
+
+broken_axes.__doc__ = """\
+Create a figure for plots with one or more discontinuous axis ranges.
+
+This is a figure-level interface to :class:`BrokenAxes`. Use that class
+directly when you need to embed the layout inside a larger figure via
+``subplot_spec``.
+
+Parameters
+----------
+ylims : list of (lo, hi) pairs, optional
+    Y-axis segment limits, ordered bottom-to-top.
+xlims : list of (lo, hi) pairs, optional
+    X-axis segment limits, ordered left-to-right.
+**kwargs
+    Additional keyword arguments passed to :class:`BrokenAxes`.
+
+Returns
+-------
+{returns.brokengrid}
+
+See Also
+--------
+{seealso.brokengrid}
+{seealso.jointgrid}
+""".format(
     returns=_core_docs["returns"],
     seealso=_core_docs["seealso"],
 )

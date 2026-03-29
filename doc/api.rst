@@ -244,6 +244,16 @@ Joint grids
     jointplot
     JointGrid
 
+Broken axes
+~~~~~~~~~~~
+
+.. autosummary::
+    :toctree: generated/
+    :nosignatures:
+
+    broken_axes
+    BrokenAxes
+
 .. _style_api:
 
 Themeing
