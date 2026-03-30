@@ -2765,7 +2765,7 @@ class BrokenAxes(_BaseGrid):
             ax.set(**kwargs)
         return self
 
-    def plot(self, func, *args, clip_data="warn", **kwargs):
+    def plot(self, func, *args, clip_data="warn", legend_ax=None, **kwargs):
         """Call a plotting function on each axis segment.
 
         The function is called once per segment axis. Matplotlib clips data
@@ -2783,6 +2783,13 @@ class BrokenAxes(_BaseGrid):
             Controls behavior when data values fall in a gap between segments.
             ``'warn'`` (default) issues a :class:`UserWarning`. ``True``
             silently clips. ``False`` suppresses all warnings.
+        legend_ax : :class:`matplotlib.axes.Axes`, optional
+            The segment axis on which to draw the legend when the caller passes
+            ``legend=True`` (or any truthy value) to ``func``. On all other
+            segments the legend kwarg is overridden to ``False`` so that only
+            one legend appears. Defaults to the last axis in ``self.axes``
+            (the bottom axis for y-breaks, the rightmost for x-breaks).
+            Has no effect when ``legend`` is not present in ``kwargs``.
         *args, **kwargs
             Passed through to ``func`` on each segment axis.
 
@@ -2794,9 +2801,16 @@ class BrokenAxes(_BaseGrid):
         if clip_data == "warn":
             self._warn_if_data_in_gaps(kwargs)
 
+        # Resolve which axis should receive the legend (if the caller
+        # requested one).  On every other axis legend is suppressed so
+        # that duplicates are never drawn.
+        _legend_ax = legend_ax if legend_ax is not None else self.axes[-1]
+
         accepts_ax = "ax" in signature(func).parameters
         for ax in self.axes:
             kw = kwargs.copy()
+            if "legend" in kw and kw["legend"] is not False:
+                kw["legend"] = (ax is _legend_ax)
             if accepts_ax:
                 func(*args, ax=ax, **kw)
             else:

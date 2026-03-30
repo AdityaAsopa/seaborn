@@ -2109,6 +2109,24 @@ class TestBrokenAxes:
             # 1 break marker line + 1 data line = 2 lines
             assert len(ax.lines) == 2
 
+    def test_plot_legend_on_last_ax_by_default(self, long_df):
+        from seaborn.relational import lineplot
+        g = ag.BrokenAxes(ylims=[(long_df["y"].min(), long_df["y"].quantile(0.5)),
+                                  (long_df["y"].quantile(0.9), long_df["y"].max())])
+        g.plot(lineplot, data=long_df, x="x", y="y", hue="a", legend=True)
+        # legend should appear only on the last (bottom) axis
+        assert g.axes[-1].get_legend() is not None
+        assert g.axes[0].get_legend() is None
+
+    def test_plot_legend_on_custom_ax(self, long_df):
+        from seaborn.relational import lineplot
+        g = ag.BrokenAxes(ylims=[(long_df["y"].min(), long_df["y"].quantile(0.5)),
+                                  (long_df["y"].quantile(0.9), long_df["y"].max())])
+        g.plot(lineplot, data=long_df, x="x", y="y", hue="a",
+               legend=True, legend_ax=g.axes[0])
+        assert g.axes[0].get_legend() is not None
+        assert g.axes[-1].get_legend() is None
+
     def test_plot_returns_self(self):
         from seaborn.relational import scatterplot
         g = self._make_y()
