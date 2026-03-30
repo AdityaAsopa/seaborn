@@ -2933,6 +2933,12 @@ See Also
 --------
 {seealso.brokengrid}
 {seealso.jointgrid}
+
+Examples
+--------
+
+.. include:: ../docstrings/BrokenAxes.rst
+
 """.format(
     returns=_core_docs["returns"],
     seealso=_core_docs["seealso"],
