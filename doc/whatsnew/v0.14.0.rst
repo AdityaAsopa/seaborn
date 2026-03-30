@@ -1,0 +1,66 @@
+v0.14.0 (TBD)
+-------------
+
+New features
+^^^^^^^^^^^^
+
+Broken axis support: :class:`BrokenAxes` and :func:`broken_axes`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+|Feature|
+
+Many real-world datasets contain a small number of extreme values that compress
+the rest of the distribution into a narrow band when plotted on a single
+continuous axis. The standard workaround — stacking two subplots and manually
+hiding spines and tick labels — requires repetitive, figure-specific code with
+no reusable API.
+
+The new :class:`BrokenAxes` class and its companion figure-level function
+:func:`broken_axes` provide a principled, reusable solution. They create a
+layout of stacked (or side-by-side) axis segments using matplotlib's
+:class:`~matplotlib.gridspec.GridSpec` API, draw diagonal ``//`` markers at
+every break boundary, and keep all segments synchronized through shared axes.
+
+Key capabilities:
+
+- **Y-axis, x-axis, or both**: pass ``ylims``, ``xlims``, or both to break
+  either or both axes. Each argument takes a list of ``(lo, hi)`` pairs.
+
+- **Any number of segments**: two or more segments are supported on each axis,
+  enabling layouts with multiple breaks for datasets with several distinct
+  value clusters.
+
+- **Proportional or custom segment sizes**: by default each segment's height
+  (or width) is proportional to its data range. Override with ``height_ratios``
+  / ``width_ratios`` to allocate visual space where it matters.
+
+- **The** ``.plot()`` **proxy method**: calls any seaborn or matplotlib
+  plotting function on every segment simultaneously. Matplotlib clips data to
+  each segment's limits automatically, so the data does not need to be split
+  manually.
+
+- **Direct axes access**: ``g.axes`` exposes all segment axes as a flat list.
+  For two-segment grids, ``g.ax_top`` / ``g.ax_bottom`` and
+  ``g.ax_left`` / ``g.ax_right`` are set as convenience attributes.
+
+- **Figure embedding via** ``subplot_spec``: unlike :class:`JointGrid` and
+  :class:`FacetGrid`, a :class:`BrokenAxes` instance can be embedded as a
+  single cell inside a larger figure layout by passing a
+  :class:`~matplotlib.gridspec.SubplotSpec`. This makes it straightforward to
+  combine broken-axis panels with regular panels in one figure.
+
+- **Seaborn style by default**: ``despine=True`` (default) applies
+  :func:`seaborn.despine` to all segments. Marker color and weight are derived
+  from ``axes.edgecolor`` and ``axes.linewidth`` rcParams so the result is
+  consistent across themes and custom styles.
+
+.. code-block:: python
+
+    healthexp = sns.load_dataset("healthexp")
+    g = sns.BrokenAxes(ylims=[(0, 7500), (9000, 12500)], height_ratios=[4, 1])
+    g.plot(sns.lineplot, data=healthexp, x="Year", y="Spending_USD", hue="Country")
+    g.set_axis_labels("Year", "Health Spending (USD)")
+
+See the :ref:`API reference <grid_api>` and the
+:doc:`multi-plot grids tutorial <tutorial/axis_grids>` for full documentation
+and examples.

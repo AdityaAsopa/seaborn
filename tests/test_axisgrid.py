@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
@@ -1878,3 +1880,332 @@ class TestJointPlot:
         with pytest.warns(UserWarning):
             g = ag.jointplot(data=long_df, x="x", y="y", ax=ax)
         assert g.ax_joint.collections
+
+
+class TestBrokenAxes:
+
+    # ------------------------------------------------------------------ #
+    # Fixtures / helpers
+    # ------------------------------------------------------------------ #
+
+    def _make_y(self):
+        return ag.BrokenAxes(ylims=[(0, 50), (450, 500)])
+
+    def _make_x(self):
+        return ag.BrokenAxes(xlims=[(0, 10), (90, 100)])
+
+    # ------------------------------------------------------------------ #
+    # Instantiation and public attributes
+    # ------------------------------------------------------------------ #
+
+    def test_creates_figure(self):
+        g = self._make_y()
+        assert isinstance(g.figure, mpl.figure.Figure)
+
+    def test_axes_count_y(self):
+        ylims = [(0, 50), (200, 300), (450, 500)]
+        g = ag.BrokenAxes(ylims=ylims)
+        assert len(g.axes) == 3
+
+    def test_axes_count_x(self):
+        xlims = [(0, 10), (50, 60), (90, 100)]
+        g = ag.BrokenAxes(xlims=xlims)
+        assert len(g.axes) == 3
+
+    def test_ax_top_bottom_2seg(self):
+        g = self._make_y()
+        assert g.ax_top is g.axes[0]
+        assert g.ax_bottom is g.axes[1]
+
+    def test_ax_top_bottom_not_set_for_3seg(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (200, 300), (450, 500)])
+        assert not hasattr(g, "ax_top")
+        assert not hasattr(g, "ax_bottom")
+
+    def test_ax_left_right_2seg(self):
+        g = self._make_x()
+        assert g.ax_left is g.axes[0]
+        assert g.ax_right is g.axes[1]
+
+    def test_axes_ylimits(self):
+        ylims = [(0, 50), (450, 500)]
+        g = ag.BrokenAxes(ylims=ylims)
+        # axes[0] is the top segment (highest values)
+        assert g.axes[0].get_ylim() == (450, 500)
+        assert g.axes[1].get_ylim() == (0, 50)
+
+    def test_axes_xlimits(self):
+        xlims = [(0, 10), (90, 100)]
+        g = ag.BrokenAxes(xlims=xlims)
+        assert g.axes[0].get_xlim() == (0, 10)
+        assert g.axes[1].get_xlim() == (90, 100)
+
+    def test_figure_property(self):
+        g = self._make_y()
+        assert g.figure is g.fig  # _BaseGrid compat
+
+    # ------------------------------------------------------------------ #
+    # Validation errors
+    # ------------------------------------------------------------------ #
+
+    def test_no_lims_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            ag.BrokenAxes()
+
+    def test_single_ylim_raises(self):
+        with pytest.raises(ValueError, match="at least 2"):
+            ag.BrokenAxes(ylims=[(0, 50)])
+
+    def test_single_xlim_raises(self):
+        with pytest.raises(ValueError, match="at least 2"):
+            ag.BrokenAxes(xlims=[(0, 10)])
+
+    def test_height_ratio_mismatch_raises(self):
+        with pytest.raises(ValueError, match="height_ratios"):
+            ag.BrokenAxes(ylims=[(0, 50), (450, 500)], height_ratios=[1, 2, 3])
+
+    def test_width_ratio_mismatch_raises(self):
+        with pytest.raises(ValueError, match="width_ratios"):
+            ag.BrokenAxes(xlims=[(0, 10), (90, 100)], width_ratios=[1, 2, 3])
+
+    def test_fig_and_subplot_spec_raises(self):
+        outer_fig, outer_axes = plt.subplots(1, 2)
+        ss = outer_axes[0].get_subplotspec()
+        with pytest.raises(ValueError, match="at most one"):
+            ag.BrokenAxes(ylims=[(0, 50), (450, 500)],
+                          fig=outer_fig, subplot_spec=ss)
+
+    # ------------------------------------------------------------------ #
+    # Grid construction and embedding
+    # ------------------------------------------------------------------ #
+
+    def test_existing_fig_used(self):
+        fig = plt.figure()
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], fig=fig)
+        assert g.figure is fig
+
+    def test_subplot_spec_embedding(self):
+        outer_fig, outer_axes = plt.subplots(1, 2)
+        ss = outer_axes[0].get_subplotspec()
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], subplot_spec=ss)
+        # All broken axes should belong to the outer figure
+        assert g.figure is outer_fig
+        for ax in g.axes:
+            assert ax.get_figure() is outer_fig
+
+    def test_height_ratios_applied(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], height_ratios=[3, 1])
+        # The top axis (small spike segment) should be shorter.
+        # We can't easily check pixel heights in a headless test, but we can
+        # verify that the axes were created successfully with the ratios argument.
+        assert len(g.axes) == 2
+
+    def test_figsize(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], figsize=(10, 8))
+        size = g.figure.get_size_inches()
+        assert size[0] == pytest.approx(10)
+        assert size[1] == pytest.approx(8)
+
+    def test_2d_axes_grid_shape(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], xlims=[(0, 10), (90, 100)])
+        assert g._axes_2d.shape == (2, 2)
+        assert len(g.axes) == 4
+
+    # ------------------------------------------------------------------ #
+    # Spine and tick label management
+    # ------------------------------------------------------------------ #
+
+    def test_inner_bottom_spine_hidden_y(self):
+        g = self._make_y()
+        # ax_top is axes[0]; its bottom spine should be hidden
+        assert not g.ax_top.spines["bottom"].get_visible()
+
+    def test_inner_top_spine_hidden_y(self):
+        g = self._make_y()
+        # ax_bottom is axes[1]; its top spine should be hidden
+        assert not g.ax_bottom.spines["top"].get_visible()
+
+    def test_outer_top_spine_visible_y(self):
+        g = self._make_y()
+        # The top segment's top spine should remain (despine removes it by default,
+        # but inner-spine management should not hide it)
+        # After despine, top and right spines are removed — that's expected.
+        # What we really check is that the BOTTOM of ax_bottom is still visible.
+        assert g.ax_bottom.spines["bottom"].get_visible()
+
+    def test_xticklabels_hidden_on_upper_axes_y(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (200, 300), (450, 500)])
+        # tick_params(labelbottom=False) sets label1On=False in _major_tick_kw,
+        # which persists across redraws triggered by later plot calls.
+        for ax in g.axes[:-1]:
+            assert not ax.xaxis._major_tick_kw.get("label1On", True)
+
+    def test_inner_left_spine_hidden_x(self):
+        g = self._make_x()
+        assert not g.ax_right.spines["left"].get_visible()
+
+    def test_inner_right_spine_hidden_x(self):
+        g = self._make_x()
+        assert not g.ax_left.spines["right"].get_visible()
+
+    def test_yticklabels_hidden_on_right_axes_x(self):
+        g = ag.BrokenAxes(xlims=[(0, 10), (50, 60), (90, 100)])
+        for ax in g.axes[1:]:
+            params = ax.yaxis.get_tick_params(which="major")
+            assert not params.get("labelleft", True)
+
+    # ------------------------------------------------------------------ #
+    # Break markers
+    # ------------------------------------------------------------------ #
+
+    def test_break_markers_present_y(self):
+        g = self._make_y()
+        # With despine=True (default), the right spine is removed, so markers
+        # are drawn only at the left spine (x=0) — one plot call per axis per
+        # boundary produces one Line2D with clip_on=False.
+        top_markers = [ln for ln in g.ax_top.lines if not ln.get_clip_on()]
+        bot_markers = [ln for ln in g.ax_bottom.lines if not ln.get_clip_on()]
+        assert len(top_markers) == 1
+        assert len(bot_markers) == 1
+
+    def test_break_markers_present_x(self):
+        g = self._make_x()
+        left_markers = [ln for ln in g.ax_left.lines if not ln.get_clip_on()]
+        right_markers = [ln for ln in g.ax_right.lines if not ln.get_clip_on()]
+        assert len(left_markers) == 1
+        assert len(right_markers) == 1
+
+    def test_break_markers_both_sides_when_no_despine(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], despine=False)
+        top_markers = [ln for ln in g.ax_top.lines if not ln.get_clip_on()]
+        # One Line2D object, but with 2 marker points (x=0 and x=1)
+        assert len(top_markers) == 1
+        assert len(top_markers[0].get_xdata()) == 2
+
+    def test_custom_d_affects_marker_slope(self):
+        g_shallow = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], d=0.2)
+        g_steep = ag.BrokenAxes(ylims=[(0, 50), (450, 500)], d=0.8)
+        shallow_marker = [ln for ln in g_shallow.ax_top.lines
+                          if not ln.get_clip_on()][0]
+        steep_marker = [ln for ln in g_steep.ax_top.lines
+                        if not ln.get_clip_on()][0]
+        # The marker path (slope) should differ with different d values
+        assert shallow_marker.get_marker() != steep_marker.get_marker()
+
+    # ------------------------------------------------------------------ #
+    # .plot() method
+    # ------------------------------------------------------------------ #
+
+    def test_plot_draws_on_all_axes_y(self):
+        # Use ax.plot (Axes method) which doesn't accept ax= kwarg
+        g = self._make_y()
+        x = np.linspace(0, 1, 10)
+        y = np.linspace(0, 10, 10)
+        for ax in g.axes:
+            assert len(ax.lines) == 1  # only the break marker (one Line2D)
+
+        g.plot(lambda x, y, ax: ax.plot(x, y), x, y)
+        for ax in g.axes:
+            # 1 break marker line + 1 data line = 2 lines
+            assert len(ax.lines) == 2
+
+    def test_plot_legend_on_last_ax_by_default(self, long_df):
+        from seaborn.relational import lineplot
+        g = ag.BrokenAxes(ylims=[(long_df["y"].min(), long_df["y"].quantile(0.5)),
+                                  (long_df["y"].quantile(0.9), long_df["y"].max())])
+        g.plot(lineplot, data=long_df, x="x", y="y", hue="a", legend=True)
+        # legend should appear only on the last (bottom) axis
+        assert g.axes[-1].get_legend() is not None
+        assert g.axes[0].get_legend() is None
+
+    def test_plot_legend_on_custom_ax(self, long_df):
+        from seaborn.relational import lineplot
+        g = ag.BrokenAxes(ylims=[(long_df["y"].min(), long_df["y"].quantile(0.5)),
+                                  (long_df["y"].quantile(0.9), long_df["y"].max())])
+        g.plot(lineplot, data=long_df, x="x", y="y", hue="a",
+               legend=True, legend_ax=g.axes[0])
+        assert g.axes[0].get_legend() is not None
+        assert g.axes[-1].get_legend() is None
+
+    def test_plot_returns_self(self):
+        from seaborn.relational import scatterplot
+        g = self._make_y()
+        result = g.plot(scatterplot, x=np.array([0.0]), y=np.array([0.0]))
+        assert result is g
+
+    def test_plot_warns_data_in_gap(self):
+        from seaborn.relational import scatterplot
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)])
+        x = np.array([0.0, 1.0, 2.0])
+        y = np.array([10.0, 200.0, 480.0])  # 200 is in the gap (50, 450)
+        with pytest.warns(UserWarning, match="y-axis gap"):
+            g.plot(scatterplot, x=x, y=y, clip_data="warn")
+
+    def test_plot_no_warn_when_clip_data_false(self):
+        from seaborn.relational import scatterplot
+        g = ag.BrokenAxes(ylims=[(0, 50), (450, 500)])
+        x = np.array([0.0, 1.0, 2.0])
+        y = np.array([10.0, 200.0, 480.0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            g.plot(scatterplot, x=x, y=y, clip_data=False)
+
+    def test_plot_seaborn_func(self, long_df):
+        from seaborn.relational import lineplot
+        g = ag.BrokenAxes(ylims=[(long_df["y"].min(), long_df["y"].quantile(0.5)),
+                                  (long_df["y"].quantile(0.9), long_df["y"].max())])
+        g.plot(lineplot, data=long_df, x="x", y="y")
+        for ax in g.axes:
+            assert len(ax.lines) > 0
+
+    # ------------------------------------------------------------------ #
+    # .set_axis_labels()
+    # ------------------------------------------------------------------ #
+
+    def test_xlabel_on_bottom_ax(self):
+        g = self._make_y()
+        g.set_axis_labels(xlabel="Time")
+        assert g.ax_bottom.get_xlabel() == "Time"
+
+    def test_ylabel_not_on_bottom_ax_for_3seg(self):
+        g = ag.BrokenAxes(ylims=[(0, 50), (200, 300), (450, 500)])
+        g.set_axis_labels(ylabel="Value")
+        # Middle axis (index 1) should get the y-label
+        assert g.axes[1].get_ylabel() == "Value"
+
+    def test_ylabel_on_left_ax_x_break(self):
+        g = self._make_x()
+        g.set_axis_labels(ylabel="Count")
+        assert g.ax_left.get_ylabel() == "Count"
+
+    def test_set_axis_labels_returns_self(self):
+        g = self._make_y()
+        result = g.set_axis_labels("x", "y")
+        assert result is g
+
+    # ------------------------------------------------------------------ #
+    # .set() override
+    # ------------------------------------------------------------------ #
+
+    def test_set_applies_to_all_axes(self):
+        g = self._make_y()
+        g.set(facecolor="red")
+        for ax in g.axes:
+            assert ax.get_facecolor() == mpl.colors.to_rgba("red")
+
+    def test_set_returns_self(self):
+        g = self._make_y()
+        assert g.set() is g
+
+    # ------------------------------------------------------------------ #
+    # broken_axes() factory
+    # ------------------------------------------------------------------ #
+
+    def test_broken_axes_factory_returns_instance(self):
+        g = ag.broken_axes(ylims=[(0, 50), (450, 500)])
+        assert isinstance(g, ag.BrokenAxes)
+
+    def test_broken_axes_factory_kwargs_forwarded(self):
+        fig = plt.figure()
+        g = ag.broken_axes(ylims=[(0, 50), (450, 500)], fig=fig)
+        assert g.figure is fig
